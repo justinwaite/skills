@@ -113,6 +113,108 @@ it.effect('test failure as Exit', () =>
 );
 ```
 
+# Providing a Layer to Multiple Tests
+
+Use the `layer` named export from `@effect/vitest` to provide the same layer to
+all `it.effect` blocks in a group — no need to pipe `Effect.provide` in every
+test. The callback receives an `it` whose `.effect` calls have the layer
+pre-wired.
+
+```ts
+import { expect, layer } from '@effect/vitest';
+import { Effect, Layer } from 'effect';
+
+class Database extends Context.Service<Database>()('Database', {}) {}
+
+const testLayer = Layer.succeed(Database, { query: vi.fn() });
+
+// Named form wraps in a describe block automatically
+layer(testLayer)('MyService tests', (it) => {
+  it.effect('uses Database from layer', () =>
+    Effect.gen(function* () {
+      const db = yield* Database;
+      // db is provided — no Effect.provide needed
+    }),
+  );
+
+  it.effect('another test with the same layer', () =>
+    Effect.gen(function* () {
+      const db = yield* Database;
+      // same layer instance
+    }),
+  );
+});
+```
+
+The `layer` function signature:
+
+```ts
+import { layer } from '@effect/vitest';
+
+layer(someLayer)(callback); // inline, no describe wrapper
+layer(someLayer)('name', callback); // wraps in a describe block
+```
+
+# Asserting Errors
+
+**NEVER access `error._tag` in tests.** It is an internal implementation detail.
+Checking it bypasses TypeScript's type narrowing and will silently pass even if
+the wrong error type is thrown.
+
+Use `Effect.flip` to extract the error from a failing effect, then assert the
+type with `toBeInstanceOf`:
+
+```ts
+import { expect, layer } from '@effect/vitest';
+import { Effect } from 'effect';
+
+it.effect('propagates write errors', () =>
+  Effect.gen(function* () {
+    const error = yield* ctx.write([...]).pipe(Effect.flip);
+    expect(error).toBeInstanceOf(FgaWriteError);
+    // additional assertions on error-specific properties as needed
+  }),
+);
+```
+
+`toBeInstanceOf` is type-safe, reads clearly, and correctly identifies the error
+class without coupling to internal string tags.
+
+# Writing Tests with `it.scoped`
+
+The `it.scoped` method is used for tests that involve `Effect` programs needing
+a `Scope`. A `Scope` ensures that any resources your test acquires are managed
+properly, meaning they will be released when the test completes. This helps
+prevent resource leaks and guarantees test isolation.
+
+**Example** (Using `it.scoped` to Manage Resource Lifecycle)
+
+```ts
+import { it } from '@effect/vitest';
+import { Console, Effect } from 'effect';
+
+// Simulating the acquisition and release of a resource with console logging
+const acquire = Console.log('acquire resource');
+const release = Console.log('release resource');
+
+// Defining a resource that requires proper management
+const resource = Effect.acquireRelease(acquire, () => release);
+
+// Incorrect usage: This will result in a type error because it lacks a scope
+it.effect('run with scope', () =>
+  Effect.gen(function* () {
+    yield* resource;
+  }),
+);
+
+// Correct usage: Using 'it.scoped' to manage the scope correctly
+it.scoped('run with scope', () =>
+  Effect.gen(function* () {
+    yield* resource;
+  }),
+);
+```
+
 ## Using the TestClock
 
 When writing tests with `it.effect`, a `TestContext` is automatically provided.
@@ -284,41 +386,6 @@ it.effect('providing a logger displays a log', () =>
 it.live('it.live displays a log', () =>
   Effect.gen(function* () {
     yield* Effect.log('it.live'); // Log will be displayed
-  }),
-);
-```
-
-# Writing Tests with `it.scoped`
-
-The `it.scoped` method is used for tests that involve `Effect` programs needing
-a `Scope`. A `Scope` ensures that any resources your test acquires are managed
-properly, meaning they will be released when the test completes. This helps
-prevent resource leaks and guarantees test isolation.
-
-**Example** (Using `it.scoped` to Manage Resource Lifecycle)
-
-```ts
-import { it } from '@effect/vitest';
-import { Console, Effect } from 'effect';
-
-// Simulating the acquisition and release of a resource with console logging
-const acquire = Console.log('acquire resource');
-const release = Console.log('release resource');
-
-// Defining a resource that requires proper management
-const resource = Effect.acquireRelease(acquire, () => release);
-
-// Incorrect usage: This will result in a type error because it lacks a scope
-it.effect('run with scope', () =>
-  Effect.gen(function* () {
-    yield* resource;
-  }),
-);
-
-// Correct usage: Using 'it.scoped' to manage the scope correctly
-it.scoped('run with scope', () =>
-  Effect.gen(function* () {
-    yield* resource;
   }),
 );
 ```
